@@ -3,11 +3,14 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Product } from "../types";
 
 export const analyzeProductImage = async (base64Image: string): Promise<Partial<Product>> => {
-  // On récupère la clé : soit l'env, soit le stockage local manuel
-  const apiKey = localStorage.getItem('gemini_api_key') || process.env.API_KEY || "";
+  // Récupération de la clé avec priorité au stockage local
+  const storedKey = localStorage.getItem('gemini_api_key');
+  const envKey = process.env.API_KEY;
+  
+  const apiKey = (storedKey && storedKey.length > 5) ? storedKey : envKey;
   
   if (!apiKey || apiKey === "undefined" || apiKey === "null") {
-    throw new Error("Clé API manquante ou invalide.");
+    throw new Error("Clé API manquante ou invalide dans les réglages.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -24,12 +27,12 @@ export const analyzeProductImage = async (base64Image: string): Promise<Partial<
             },
           },
           {
-            text: "Extraire les informations du produit depuis cette étiquette ou ce code-barres : Code-Barre (EAN), Marque, Modèle/SKU, Nom du produit, Taille, Prix estimé en EUR, Couleur dominante, Saison (ex: FW24).",
+            text: "Analyse cette étiquette de vêtement/sneakers. Extrais : Code-Barre (chiffres), Marque, Modèle, Nom du produit, Taille, Prix, Couleur, Saison (ex: FW24), Type (ex: Veste). Réponds uniquement en JSON.",
           },
         ],
       },
       config: {
-        systemInstruction: `Tu es un assistant expert en logistique streetwear et mode. Tu dois analyser les images d'étiquettes de vêtements ou chaussures pour en extraire les métadonnées. Réponds uniquement en JSON pur.`,
+        systemInstruction: "Tu es un expert en logistique mode. Tu dois extraire les données techniques. Réponds exclusivement au format JSON pur, sans balises de code markdown, sans texte avant ou après.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -48,11 +51,24 @@ export const analyzeProductImage = async (base64Image: string): Promise<Partial<
       },
     });
 
-    const text = response.text;
-    if (!text) throw new Error("L'IA n'a pas pu lire l'image.");
-    return JSON.parse(text);
+    let resultText = response.text || "";
+    
+    // Nettoyage au cas où l'IA envoie quand même du Markdown
+    resultText = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    if (!resultText) throw new Error("L'IA n'a pas pu extraire de données exploitables.");
+    
+    try {
+      return JSON.parse(resultText);
+    } catch (parseError) {
+      console.error("JSON Parse Error. Raw text:", resultText);
+      throw new Error("Format de réponse invalide de l'IA.");
+    }
   } catch (error: any) {
-    console.error("Gemini Error:", error);
+    console.error("Gemini API Error:", error);
+    if (error.message?.includes("API_KEY_INVALID")) {
+      throw new Error("La clé API est invalide. Veuillez la modifier.");
+    }
     throw error;
   }
 };
