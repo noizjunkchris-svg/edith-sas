@@ -3,14 +3,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Product } from "../types";
 
 export const analyzeProductImage = async (base64Image: string): Promise<Partial<Product>> => {
-  // Récupération de la clé avec priorité au stockage local
-  const storedKey = localStorage.getItem('gemini_api_key');
-  const envKey = process.env.API_KEY;
+  // Utilisation exclusive de la clé environnement comme requis
+  const apiKey = process.env.API_KEY;
   
-  const apiKey = (storedKey && storedKey.length > 5) ? storedKey : envKey;
-  
-  if (!apiKey || apiKey === "undefined" || apiKey === "null") {
-    throw new Error("Clé API manquante ou invalide dans les réglages.");
+  if (!apiKey) {
+    throw new Error("Configuration système : Clé API non détectée.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -27,12 +24,12 @@ export const analyzeProductImage = async (base64Image: string): Promise<Partial<
             },
           },
           {
-            text: "Analyse cette étiquette de vêtement/sneakers. Extrais : Code-Barre (chiffres), Marque, Modèle, Nom du produit, Taille, Prix, Couleur, Saison (ex: FW24), Type (ex: Veste). Réponds uniquement en JSON.",
+            text: "Ceci est une étiquette de produit Streetwear/Fashion. Extrais les informations suivantes : 1. Barcode (le code numérique sous les barres), 2. Brand (Marque), 3. Model (Référence technique type ADYDP...), 4. Name (Nom du modèle), 5. Size (Taille), 6. Price (Prix en EUR de préférence), 7. Color, 8. Season (ex: FW24). Réponds uniquement en JSON.",
           },
         ],
       },
       config: {
-        systemInstruction: "Tu es un expert en logistique mode. Tu dois extraire les données techniques. Réponds exclusivement au format JSON pur, sans balises de code markdown, sans texte avant ou après.",
+        systemInstruction: "Tu es un expert en logistique mode. Tu sais lire les étiquettes même si le texte est vertical ou s'il y a plusieurs devises. Extrais les données au format JSON pur. Si une donnée manque, utilise 'N/A'.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -45,30 +42,15 @@ export const analyzeProductImage = async (base64Image: string): Promise<Partial<
             price: { type: Type.STRING },
             color: { type: Type.STRING },
             season: { type: Type.STRING },
-            productType: { type: Type.STRING },
           },
         },
       },
     });
 
-    let resultText = response.text || "";
-    
-    // Nettoyage au cas où l'IA envoie quand même du Markdown
-    resultText = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    if (!resultText) throw new Error("L'IA n'a pas pu extraire de données exploitables.");
-    
-    try {
-      return JSON.parse(resultText);
-    } catch (parseError) {
-      console.error("JSON Parse Error. Raw text:", resultText);
-      throw new Error("Format de réponse invalide de l'IA.");
-    }
+    const resultText = response.text || "";
+    return JSON.parse(resultText.replace(/```json/g, "").replace(/```/g, "").trim());
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    if (error.message?.includes("API_KEY_INVALID")) {
-      throw new Error("La clé API est invalide. Veuillez la modifier.");
-    }
-    throw error;
+    console.error("Gemini Error:", error);
+    throw new Error(error.message || "Erreur d'analyse de l'étiquette");
   }
 };
