@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Camera, Zap, ZapOff, FlipHorizontal, ZoomIn, ZoomOut, ImageIcon, Loader2 } from 'lucide-react';
+import { Camera, Zap, FlipHorizontal, ImageIcon, Loader2, AlertCircle } from 'lucide-react';
 import { analyzeProductImage } from '../services/geminiService';
 import { Product, ScanStatus } from '../types';
 
@@ -21,24 +21,37 @@ const Scanner: React.FC<ScannerProps> = ({ onProductDetected }) => {
 
   const startCamera = async () => {
     try {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      const constraints = { video: { facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } } };
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+      const constraints = { 
+        video: { 
+          facingMode, 
+          width: { ideal: 1920 }, // On demande le max
+          height: { ideal: 1080 },
+          focusMode: 'continuous'
+        } as any 
+      };
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
         setStream(newStream);
         setStatus('scanning');
+        
         const track = newStream.getVideoTracks()[0];
-        const capabilities = track.getCapabilities() as any;
-        setHasTorch(!!capabilities.torch);
+        const capabilities = (track.getCapabilities && track.getCapabilities()) || {};
+        setHasTorch(!!(capabilities as any).torch);
       }
     } catch (err) {
-      setError("Autoriser la caméra");
+      setError("Accès caméra refusé.");
       setStatus('error');
     }
   };
 
-  useEffect(() => { startCamera(); return () => stream?.getTracks().forEach(t => t.stop()); }, [facingMode]);
+  useEffect(() => { 
+    startCamera(); 
+    return () => stream?.getTracks().forEach(t => t.stop()); 
+  }, [facingMode]);
 
   const processImage = async (base64: string) => {
     setStatus('analyzing');
@@ -47,85 +60,122 @@ const Scanner: React.FC<ScannerProps> = ({ onProductDetected }) => {
       const productData = await analyzeProductImage(base64);
       onProductDetected(productData);
       setStatus('success');
-      setTimeout(() => setStatus('scanning'), 2000);
+      setTimeout(() => setStatus('scanning'), 1500);
     } catch (err: any) {
-      let msg = "Erreur de lecture";
-      if (err.message?.includes("API key") || err.message?.includes("entity was not found")) {
-        msg = "Clé API non détectée (Déployez sur Netlify)";
-      }
-      setError(msg);
+      setError(err.message || "Erreur de lecture");
       setStatus('error');
-      setTimeout(() => setStatus('scanning'), 5000);
+      setTimeout(() => setStatus('scanning'), 4000);
     }
   };
 
   const captureAndAnalyze = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current || !canvasRef.current || status === 'analyzing') return;
+    
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    
+    // Capture haute définition (1280px) pour Gemini
+    canvas.width = 1280;
+    canvas.height = (video.videoHeight / video.videoWidth) * 1280;
     const ctx = canvas.getContext('2d');
+    
     if (ctx) {
-      ctx.drawImage(video, 0, 0);
-      const base64Image = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const base64Image = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
       await processImage(base64Image);
     }
   };
 
   return (
-    <div className="relative w-full max-w-md mx-auto aspect-[3/4.2] bg-black rounded-[3rem] overflow-hidden border-2 border-neutral-900 shadow-2xl">
-      <video ref={videoRef} autoPlay playsInline className={`w-full h-full object-cover transition-opacity duration-700 ${status === 'analyzing' ? 'opacity-30' : 'opacity-100'}`} />
+    <div className="relative w-full max-w-lg mx-auto aspect-[3/4.5] bg-neutral-950 rounded-[3.5rem] overflow-hidden border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.5)]">
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        className={`w-full h-full object-cover transition-all duration-700 ${status === 'analyzing' ? 'scale-105 blur-xl opacity-40' : 'scale-100 opacity-100'}`} 
+      />
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Top Controls */}
-      <div className="absolute top-6 left-0 right-0 px-6 flex justify-between pointer-events-none z-20">
-        <button onClick={() => setFacingMode(f => f === 'environment' ? 'user' : 'environment')} className="p-3 bg-black/40 backdrop-blur-xl rounded-full text-white pointer-events-auto active:scale-90 border border-white/10"><FlipHorizontal className="w-5 h-5" /></button>
-        <div className="flex gap-2 pointer-events-auto">
-          <button onClick={() => fileInputRef.current?.click()} className="p-3 bg-black/40 backdrop-blur-xl rounded-full text-white border border-white/10"><ImageIcon className="w-5 h-5" /></button>
-          <input type="file" ref={fileInputRef} onChange={e => {
-            const f = e.target.files?.[0];
-            if (f) { const r = new FileReader(); r.onload = ev => processImage((ev.target?.result as string).split(',')[1]); r.readAsDataURL(f); }
-          }} className="hidden" />
-          {hasTorch && <button onClick={() => {
-            stream?.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: !isTorchOn }] } as any);
-            setIsTorchOn(!isTorchOn);
-          }} className={`p-3 backdrop-blur-xl rounded-full text-white border border-white/10 ${isTorchOn ? 'bg-emerald-500' : 'bg-black/40'}`}><Zap className="w-5 h-5" /></button>}
-        </div>
-      </div>
-
-      {/* Viewfinder */}
-      <div className="absolute inset-0 flex flex-col pointer-events-none z-10">
-        <div className="flex-1 flex items-center justify-center p-12">
-          <div className="relative w-full aspect-square max-w-[200px] border-2 border-white/5 rounded-3xl">
-            {status === 'scanning' && <div className="absolute inset-0 overflow-hidden rounded-3xl"><div className="w-full h-1 bg-emerald-400 shadow-[0_0_15px_rgba(16,185,129,1)] animate-[scan_2s_ease-in-out_infinite]"></div></div>}
-            {status === 'analyzing' && <div className="absolute inset-0 flex items-center justify-center"><Loader2 className="w-10 h-10 text-emerald-500 animate-spin" /></div>}
-            <div className="absolute -top-1 -left-1 w-6 h-6 border-t-2 border-l-2 border-emerald-500 rounded-tl-xl opacity-50"></div>
-            <div className="absolute -top-1 -right-1 w-6 h-6 border-t-2 border-r-2 border-emerald-500 rounded-tr-xl opacity-50"></div>
-            <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-2 border-l-2 border-emerald-500 rounded-bl-xl opacity-50"></div>
-            <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-2 border-r-2 border-emerald-500 rounded-br-xl opacity-50"></div>
+      <div className="absolute inset-0 flex flex-col z-10">
+        <div className="p-8 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
+          <button onClick={() => setFacingMode(f => f === 'environment' ? 'user' : 'environment')} className="p-4 bg-black/40 backdrop-blur-xl rounded-full text-white border border-white/10 active:scale-90 transition-transform">
+            <FlipHorizontal className="w-5 h-5" />
+          </button>
+          
+          <div className="flex gap-3">
+            <button onClick={() => fileInputRef.current?.click()} className="p-4 bg-black/40 backdrop-blur-xl rounded-full text-white border border-white/10 active:scale-90 transition-transform">
+              <ImageIcon className="w-5 h-5" />
+            </button>
+            <input type="file" ref={fileInputRef} accept="image/*" onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) { 
+                  const r = new FileReader(); 
+                  r.onload = ev => processImage((ev.target?.result as string).split(',')[1]); 
+                  r.readAsDataURL(f); 
+                }
+              }} className="hidden" />
+            {hasTorch && (
+              <button onClick={() => {
+                  stream?.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: !isTorchOn }] } as any);
+                  setIsTorchOn(!isTorchOn);
+                }} className={`p-4 backdrop-blur-xl rounded-full border border-white/10 transition-all ${isTorchOn ? 'bg-emerald-500 text-black border-emerald-400' : 'bg-black/40 text-white'}`}>
+                <Zap className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 
-        {/* ACTION ZONE */}
-        <div className="pb-10 pt-4 pointer-events-auto bg-gradient-to-t from-black via-black/80 to-transparent flex flex-col items-center">
-          {status === 'analyzing' ? (
-             <span className="text-[7px] font-black uppercase tracking-[0.4em] text-emerald-500 animate-pulse mb-8">Analyse en cours...</span>
-          ) : status === 'error' ? (
-             <div className="mb-8 px-4 py-2 bg-red-500/20 border border-red-500/30 rounded-full flex items-center gap-2">
-                <span className="text-[7px] font-black uppercase tracking-[0.2em] text-red-400">{error}</span>
-             </div>
-          ) : (
+        <div className="flex-1 flex items-center justify-center p-12">
+          <div className="relative w-full aspect-square max-w-[280px]">
+            {/* Corners UI */}
+            <div className="absolute -top-1 -left-1 w-12 h-12 border-t-[5px] border-l-[5px] border-emerald-500 rounded-tl-3xl shadow-[0_0_15px_rgba(16,185,129,0.3)]"></div>
+            <div className="absolute -top-1 -right-1 w-12 h-12 border-t-[5px] border-r-[5px] border-emerald-500 rounded-tr-3xl shadow-[0_0_15px_rgba(16,185,129,0.3)]"></div>
+            <div className="absolute -bottom-1 -left-1 w-12 h-12 border-b-[5px] border-l-[5px] border-emerald-500 rounded-bl-3xl shadow-[0_0_15px_rgba(16,185,129,0.3)]"></div>
+            <div className="absolute -bottom-1 -right-1 w-12 h-12 border-b-[5px] border-r-[5px] border-emerald-500 rounded-br-3xl shadow-[0_0_15px_rgba(16,185,129,0.3)]"></div>
+            
+            {status === 'scanning' && (
+              <div className="absolute inset-0 overflow-hidden rounded-3xl">
+                <div className="w-full h-[2px] bg-emerald-400 shadow-[0_0_25px_rgba(16,185,129,1)] animate-[scan_2.5s_ease-in-out_infinite]"></div>
+              </div>
+            )}
+            
+            {status === 'analyzing' && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/20 rounded-3xl backdrop-blur-md border border-emerald-500/30">
+                <Loader2 className="w-14 h-14 text-emerald-500 animate-spin mb-4" />
+                <span className="text-[11px] font-black uppercase tracking-[0.4em] text-emerald-400 animate-pulse">Extraction...</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="pb-16 pt-8 px-10 bg-gradient-to-t from-black to-transparent flex flex-col items-center gap-8">
+          {error && (
+            <div className="w-full flex items-center gap-4 p-5 bg-red-600/90 backdrop-blur-xl border border-white/20 rounded-[2rem] animate-in zoom-in-95">
+              <AlertCircle className="w-6 h-6 text-white shrink-0" />
+              <p className="text-[11px] font-black text-white uppercase tracking-tight leading-tight">{error}</p>
+            </div>
+          )}
+
+          {status !== 'analyzing' && (
             <button 
               onClick={captureAndAnalyze}
-              className="w-12 h-12 bg-emerald-600 rounded-full border-4 border-white/10 shadow-2xl active:scale-75 transition-all flex items-center justify-center mb-6 group"
+              className="group relative w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform overflow-hidden"
             >
-              <Camera className="w-5 h-5 text-white group-active:scale-110" />
+              <div className="absolute inset-0 bg-emerald-500 opacity-0 group-hover:opacity-10 transition-opacity"></div>
+              <Camera className="w-10 h-10 text-black" />
             </button>
           )}
-          <p className="text-white/20 text-[6px] font-black uppercase tracking-[0.5em]">Edith Visual AI 3.0</p>
+          
+          <p className="text-white/20 text-[8px] font-black uppercase tracking-[0.6em]">Edith Visual Core 3.5</p>
         </div>
       </div>
+
+      <style>{`
+        @keyframes scan {
+          0%, 100% { transform: translateY(0); opacity: 0.2; }
+          50% { transform: translateY(280px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 };
