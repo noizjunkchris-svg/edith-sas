@@ -1,0 +1,8 @@
+
+{
+  "name": "EDITH - Fashion Inventory",
+  "description": "A professional inventory management tool for fashion and streetwear that uses Gemini AI to identify products from barcodes and images, then syncs them to your workspace.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
